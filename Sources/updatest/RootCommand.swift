@@ -222,11 +222,6 @@ enum CLIPrinter {
     }
 }
 
-struct PhasePendingError: LocalizedError {
-    let command: String
-    var errorDescription: String? { "\(command) is not implemented yet." }
-}
-
 @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
 @main
 struct UpdateCLI: AsyncParsableCommand {
