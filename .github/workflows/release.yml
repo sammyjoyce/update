@@ -16,7 +16,7 @@ jobs:
         include:
           - runner: macos-14
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x86_64
 
     runs-on: ${{ matrix.runner }}
@@ -39,6 +39,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
     steps:
       - name: Check out repository
@@ -64,9 +66,9 @@ jobs:
           gh release upload "${GITHUB_REF_NAME}" release-assets/update-macos-arm64.tar.gz release-assets/update-macos-x86_64.tar.gz release-assets/checksums.txt --clobber
 
       - name: Update Homebrew tap
-        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ env.HOMEBREW_TAP_TOKEN }}
         run: |
           git clone "https://x-access-token:${GH_TOKEN}@github.com/sammyjoyce/homebrew-update.git" tap
           chmod +x scripts/update_tap_formula.sh
