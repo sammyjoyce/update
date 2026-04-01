@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build and package release artifact
+        run: |
+          chmod +x scripts/package_release.sh
+          scripts/package_release.sh "${{ matrix.arch }}" dist
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-${{ matrix.arch }}
+          path: dist/update-macos-${{ matrix.arch }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Gather release assets and generate checksums
+        run: |
+          mkdir -p release-assets
+          find dist -type f -name 'update-macos-*.tar.gz' -exec cp {} release-assets/ \;
+          cd release-assets
+          sha256sum update-macos-*.tar.gz > checksums.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/update-macos-arm64.tar.gz release-assets/update-macos-x86_64.tar.gz release-assets/checksums.txt --verify-tag --generate-notes || \
+          gh release upload "${GITHUB_REF_NAME}" release-assets/update-macos-arm64.tar.gz release-assets/update-macos-x86_64.tar.gz release-assets/checksums.txt --clobber
+
+      - name: Update Homebrew tap
+        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/sammyjoyce/homebrew-update.git" tap
+          chmod +x scripts/update_tap_formula.sh
+          scripts/update_tap_formula.sh "${GITHUB_REF_NAME}" release-assets/checksums.txt tap
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add Formula/update.rb README.md
+            git commit -m "update formula for ${GITHUB_REF_NAME}"
+            git push origin HEAD:main
+          fi
