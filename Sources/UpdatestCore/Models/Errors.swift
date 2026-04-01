@@ -65,8 +65,6 @@ public enum UpdateError: Error, Sendable {
     }
 }
 
-public typealias UpdatestError = UpdateError
-
 /// All stable error codes for schema introspection.
 public struct ErrorCatalog: Sendable {
     public struct Entry: Sendable {

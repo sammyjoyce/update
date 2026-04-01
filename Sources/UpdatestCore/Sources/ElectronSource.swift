@@ -5,7 +5,7 @@ public actor ElectronSource: UpdateSource {
 
     public init() {}
 
-    public func checkForUpdate(app: AppRecord, config: UpdatestConfig) async throws -> [UpdateCandidate] {
+    public func checkForUpdate(app: AppRecord, config: UpdateConfig) async throws -> [UpdateCandidate] {
         // Check if the app is an Electron app
         guard let info = PlistReader.readAppInfo(atPath: app.path), info.isElectron else {
             return []

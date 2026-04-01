@@ -6,7 +6,7 @@ public actor MetadataSource: UpdateSource {
 
     public init() {}
 
-    public func checkForUpdate(app: AppRecord, config: UpdatestConfig) async throws -> [UpdateCandidate] {
+    public func checkForUpdate(app: AppRecord, config: UpdateConfig) async throws -> [UpdateCandidate] {
         // Metadata sync must be explicitly enabled
         guard config.resolvedMetadataSyncEnabled else { return [] }
         guard let bundleId = app.bundleId else { return [] }

@@ -117,8 +117,6 @@ public struct UpdateConfig: Codable, Sendable {
     public var resolvedMetadataSyncEnabled: Bool { metadataSyncEnabled ?? false }
 }
 
-public typealias UpdatestConfig = UpdateConfig
-
 /// Describes a single config key for schema introspection.
 public struct ConfigKeySpec: Sendable {
     public let key: String
@@ -142,13 +140,13 @@ public struct ConfigKeySpec: Sendable {
 
     public static let all: [ConfigKeySpec] = [
         .init(key: "locations", type: "string[]", defaultValue: "[\"/Applications\"]",
-              envVar: "UPDATEST_LOCATIONS", description: "App directories to scan"),
+              envVar: "UPDATE_LOCATIONS", description: "App directories to scan"),
         .init(key: "brew_path", type: "string", defaultValue: "auto-detect",
-              envVar: "UPDATEST_BREW_PATH", description: "Brew binary path"),
+              envVar: "UPDATE_BREW_PATH", description: "Brew binary path"),
         .init(key: "mas_path", type: "string", defaultValue: "auto-detect",
-              envVar: "UPDATEST_MAS_PATH", description: "mas binary path"),
+              envVar: "UPDATE_MAS_PATH", description: "mas binary path"),
         .init(key: "timeout", type: "duration", defaultValue: "30s",
-              envVar: "UPDATEST_TIMEOUT", description: "Per-source timeout"),
+              envVar: "UPDATE_TIMEOUT", description: "Per-source timeout"),
         .init(key: "provider_priority", type: "string[]",
               defaultValue: "[\"appstore\",\"brew\",\"sparkle\",\"github\",\"electron\",\"metadata\"]",
               description: "Candidate selection priority"),

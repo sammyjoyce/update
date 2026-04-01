@@ -11,7 +11,7 @@ public actor ConfigService {
 
     public var userConfigPath: String {
         if let override = overridePath { return override }
-        if let envPath = ProcessInfo.processInfo.environment["UPDATEST_CONFIG"] {
+        if let envPath = ProcessInfo.processInfo.environment["UPDATE_CONFIG"] {
             return envPath
         }
         let xdgConfig = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
@@ -177,12 +177,12 @@ public actor ConfigService {
     private func applyEnvironment(to config: UpdateConfig) -> UpdateConfig {
         var c = config
         let env = ProcessInfo.processInfo.environment
-        if let v = env["UPDATEST_LOCATIONS"] {
+        if let v = env["UPDATE_LOCATIONS"] {
             c.locations = v.split(separator: ":").map(String.init)
         }
-        if let v = env["UPDATEST_BREW_PATH"] { c.brewPath = v }
-        if let v = env["UPDATEST_MAS_PATH"] { c.masPath = v }
-        if let v = env["UPDATEST_TIMEOUT"] { c.timeout = v }
+        if let v = env["UPDATE_BREW_PATH"] { c.brewPath = v }
+        if let v = env["UPDATE_MAS_PATH"] { c.masPath = v }
+        if let v = env["UPDATE_TIMEOUT"] { c.timeout = v }
         if let v = env["HTTPS_PROXY"] ?? env["HTTP_PROXY"] { c.proxy = v }
         return c
     }

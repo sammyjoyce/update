@@ -5,7 +5,7 @@ public actor GitHubSource: UpdateSource {
 
     public init() {}
 
-    public func checkForUpdate(app: AppRecord, config: UpdatestConfig) async throws -> [UpdateCandidate] {
+    public func checkForUpdate(app: AppRecord, config: UpdateConfig) async throws -> [UpdateCandidate] {
         // GitHub requires a manual_sources mapping to know the repository
         guard let rule = config.manualSources?.first(where: { rule in
             if let ruleAppId = rule.match.appId, ruleAppId == app.appId { return true }

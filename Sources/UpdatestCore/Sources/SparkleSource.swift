@@ -5,7 +5,7 @@ public actor SparkleSource: UpdateSource {
 
     public init() {}
 
-    public func checkForUpdate(app: AppRecord, config: UpdatestConfig) async throws -> [UpdateCandidate] {
+    public func checkForUpdate(app: AppRecord, config: UpdateConfig) async throws -> [UpdateCandidate] {
         // Read SUFeedURL from the app bundle
         guard let info = PlistReader.readAppInfo(atPath: app.path),
               let feedUrl = info.sparkleFeedUrl,

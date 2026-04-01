@@ -136,7 +136,7 @@ public struct ErrorEnvelope: Codable, Sendable {
     public var error: ErrorDetail
 
     public init(_ err: ErrorDetail) { self.error = err }
-    public init(_ err: UpdatestError) { self.error = err.toDetail() }
+    public init(_ err: UpdateError) { self.error = err.toDetail() }
 }
 
 public struct ErrorDetail: Codable, Sendable {
