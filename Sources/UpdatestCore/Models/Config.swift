@@ -35,7 +35,7 @@ public struct ManualSourceRule: Codable, Sendable {
     }
 }
 
-public struct UpdatestConfig: Codable, Sendable {
+public struct UpdateConfig: Codable, Sendable {
     public var locations: [String]?
     public var brewPath: String?
     public var masPath: String?
@@ -74,7 +74,7 @@ public struct UpdatestConfig: Codable, Sendable {
         self.manualSources = manualSources
     }
 
-    public static let defaults = UpdatestConfig(
+    public static let defaults = UpdateConfig(
         locations: ["/Applications"],
         brewPath: nil,
         masPath: nil,
@@ -89,7 +89,7 @@ public struct UpdatestConfig: Codable, Sendable {
     )
 
     /// Merge another config on top of this one (other overrides self for non-nil values).
-    public func merging(with other: UpdatestConfig) -> UpdatestConfig {
+    public func merging(with other: UpdateConfig) -> UpdateConfig {
         var result = self
         if let v = other.locations { result.locations = v }
         if let v = other.brewPath { result.brewPath = v }
@@ -116,6 +116,8 @@ public struct UpdatestConfig: Codable, Sendable {
     public var resolvedIgnoreMacosCompat: Bool { ignoreMacosCompat ?? false }
     public var resolvedMetadataSyncEnabled: Bool { metadataSyncEnabled ?? false }
 }
+
+public typealias UpdatestConfig = UpdateConfig
 
 /// Describes a single config key for schema introspection.
 public struct ConfigKeySpec: Sendable {

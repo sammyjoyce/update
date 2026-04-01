@@ -3,7 +3,7 @@ import Foundation
 /// Protocol for update providers.
 public protocol UpdateSource: Sendable {
     var provider: Provider { get }
-    func checkForUpdate(app: AppRecord, config: UpdatestConfig) async throws -> [UpdateCandidate]
+    func checkForUpdate(app: AppRecord, config: UpdateConfig) async throws -> [UpdateCandidate]
 }
 
 /// Default cache TTLs per provider (in seconds).

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum UpdatestError: Error, Sendable {
+public enum UpdateError: Error, Sendable {
     case validation(code: String, message: String, hint: String? = nil, details: [String: JSONValue]? = nil)
     case runtime(code: String, message: String, hint: String? = nil, details: [String: JSONValue]? = nil)
     case notFound(code: String = "not_found", message: String, details: [String: JSONValue]? = nil)
@@ -64,6 +64,8 @@ public enum UpdatestError: Error, Sendable {
         )
     }
 }
+
+public typealias UpdatestError = UpdateError
 
 /// All stable error codes for schema introspection.
 public struct ErrorCatalog: Sendable {
