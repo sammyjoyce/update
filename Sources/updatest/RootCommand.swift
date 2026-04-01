@@ -234,7 +234,25 @@ struct UpdateCLI: AsyncParsableCommand {
         commandName: "update",
         abstract: "Agent-first macOS app update checker and installer.",
         version: "1.0.0",
-        subcommands: [Apps.self, Ignores.self, Skips.self, Scan.self, Doctor.self, ConfigGroup.self, Schema.self, Completions.self]
+        subcommands: [
+            Apps.self,
+            Ignores.self,
+            Skips.self,
+            Scan.self,
+            Doctor.self,
+            ConfigGroup.self,
+            Schema.self,
+            Completions.self,
+            ListAlias.self,
+            CheckAlias.self,
+            SourcesAlias.self,
+            UpdateAlias.self,
+            AdoptAlias.self,
+            IgnoreAlias.self,
+            UnignoreAlias.self,
+            SkipAlias.self,
+            UnskipAlias.self,
+        ]
     )
 
     mutating func run() async throws {
@@ -419,13 +437,392 @@ struct Apps: AsyncParsableCommand {
     }
 
     struct Update: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Install updates for matching apps.")
+
         @OptionGroup var global: GlobalOptions
-        mutating func run() async throws { throw PhasePendingError(command: "apps update") }
+        @Argument(help: "Optional selectors.") var selectors: [String] = []
+        @Flag(name: .long, help: "Target all tracked apps.") var all: Bool = false
+        @Option(name: .long, help: "Provider filter: brew, appstore, sparkle, github, electron, metadata, all.") var provider: String = "all"
+        @Flag(name: .long, help: "Confirm execution without prompting.") var yes: Bool = false
+        @Flag(name: .long, help: "Force reinstall where supported.") var reinstall: Bool = false
+        @Flag(name: .long, help: "Disable quarantine where supported.") var noQuarantine: Bool = false
+        @Flag(name: .long, help: "Permit sudo for privileged bundle replacement.") var allowSudo: Bool = false
+        @Flag(name: .long, help: "Preview the update plan without executing it.") var dryRun: Bool = false
+        @Option(name: .long, help: "Read a raw request or replayable plan from a file path or '-'.") var input: String?
+
+        mutating func run() async throws {
+            do {
+                let configService = ConfigService(configPath: global.config)
+                var config = try await configService.effectiveConfig()
+                if let timeout = global.timeout {
+                    config.timeout = timeout
+                }
+
+                try MutationSupport.ensureNoConflictingFlags(
+                    hasInput: input != nil,
+                    conflicting: !selectors.isEmpty || all || provider.lowercased() != "all",
+                    message: "apps update accepts either positional flags or --input, not both."
+                )
+
+                let timeoutSeconds = DurationParser.parseToSeconds(config.resolvedTimeout) ?? 30
+                let coordinator = UpdateCoordinator(timeout: timeoutSeconds)
+                let executor = UpdateExecutor(timeout: timeoutSeconds)
+                let state = StateService()
+                try await state.load()
+
+                let plan: MutationPlan
+                let previewResults: [MutationResult]
+                let effectiveDryRun: Bool
+                let effectiveReinstall: Bool
+                let effectiveNoQuarantine: Bool
+                let effectiveAllowSudo: Bool
+
+                if let input {
+                    switch try MutationSupport.decodeRequestOrPlan(path: input, as: AppsUpdateRequest.self, command: "apps.update") {
+                    case .plan(let existingPlan):
+                        plan = existingPlan
+                        previewResults = existingPlan.actions.compactMap { action in
+                            guard let appId = action.appId else { return nil }
+                            return MutationResult(appId: appId, selector: "id:\(appId)", status: .planned, message: "Planned update execution.")
+                        }
+                        effectiveDryRun = dryRun
+                        effectiveReinstall = reinstall
+                        effectiveNoQuarantine = noQuarantine
+                        effectiveAllowSudo = allowSudo
+                    case .request(let request):
+                        let requestDryRun = request.dryRun ?? false
+                        effectiveDryRun = dryRun || requestDryRun
+                        effectiveReinstall = reinstall || (request.reinstall ?? false)
+                        effectiveNoQuarantine = noQuarantine || (request.noQuarantine ?? false)
+                        effectiveAllowSudo = allowSudo || (request.allowSudo ?? false)
+                        let providerFilter = try MutationSupport.parseProvider(request.provider ?? provider)
+                        let requestedSelectors = request.selectors ?? selectors
+                        let requestAll = request.all ?? all
+                        let apps = try await resolveApps(for: requestedSelectors, all: requestAll, state: state)
+                        let refreshed = try await refreshAppsIfNeeded(apps, providerFilter: providerFilter, config: config, coordinator: coordinator, state: state)
+                        (plan, previewResults) = try await buildPlan(for: refreshed, selectors: requestedSelectors, providerFilter: providerFilter, reinstall: effectiveReinstall, state: state)
+                    }
+                } else {
+                    effectiveDryRun = dryRun
+                    effectiveReinstall = reinstall
+                    effectiveNoQuarantine = noQuarantine
+                    effectiveAllowSudo = allowSudo
+                    let providerFilter = try MutationSupport.parseProvider(provider)
+                    let apps = try await resolveApps(for: selectors, all: all, state: state)
+                    let refreshed = try await refreshAppsIfNeeded(apps, providerFilter: providerFilter, config: config, coordinator: coordinator, state: state)
+                    (plan, previewResults) = try await buildPlan(for: refreshed, selectors: selectors, providerFilter: providerFilter, reinstall: effectiveReinstall, state: state)
+                }
+
+                if effectiveDryRun {
+                    try CLIPrinter.emitMutation(
+                        MutationEnvelope(command: "apps.update", dryRun: true, plan: try JSONValue.from(plan), results: previewResults),
+                        global: global
+                    )
+                    return
+                }
+
+                if !plan.actions.isEmpty {
+                    try MutationSupport.confirmIfNeeded(summary: "Update \(plan.actions.count) app(s)", yes: yes, noInput: global.noInput)
+                }
+
+                var results = previewResults.filter { $0.status != .planned }
+                for action in plan.actions {
+                    guard let appId = action.appId,
+                          let current = await state.getApp(id: appId) else {
+                        results.append(MutationResult(appId: action.appId ?? "unknown", selector: action.appId.map { "id:\($0)" } ?? "unknown", status: .runtime_failed, message: "App record not found for execution."))
+                        continue
+                    }
+
+                    if let precondition = plan.preconditions.first(where: { $0.appId == appId }), !precondition.validate(against: current) {
+                        results.append(MutationResult(appId: appId, selector: current.selectors.canonical, status: .precondition_failed, message: "Planned update preconditions no longer hold."))
+                        continue
+                    }
+
+                    let outcome = await executor.executeUpdate(
+                        action: action,
+                        record: current,
+                        config: config,
+                        reinstall: effectiveReinstall,
+                        noQuarantine: effectiveNoQuarantine,
+                        allowSudo: effectiveAllowSudo
+                    )
+                    results.append(outcome.result)
+                    if let updatedRecord = outcome.updatedRecord {
+                        await state.upsertApp(updatedRecord)
+                    }
+                }
+
+                try await state.save()
+                try CLIPrinter.emitMutation(
+                    MutationEnvelope(command: "apps.update", dryRun: false, plan: try JSONValue.from(plan), results: results),
+                    global: global
+                )
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+
+        private func resolveApps(for selectors: [String], all: Bool, state: StateService) async throws -> [AppRecord] {
+            if all {
+                return await state.allApps().filter { $0.trackingState == .active || $0.trackingState == .missing }
+            }
+            guard !selectors.isEmpty else {
+                throw UpdatestError.validation(code: "invalid_input", message: "apps update requires selectors or --all.")
+            }
+            let allowBare = isatty(STDIN_FILENO) != 0
+            let parsed = try SelectorParser.parseMany(selectors, allowBare: allowBare).get()
+            return try await state.resolveMany(selectors: parsed)
+        }
+
+        private func refreshAppsIfNeeded(
+            _ apps: [AppRecord],
+            providerFilter: Provider?,
+            config: UpdateConfig,
+            coordinator: UpdateCoordinator,
+            state: StateService
+        ) async throws -> [AppRecord] {
+            var refreshed: [AppRecord] = []
+            for app in apps {
+                let matchingCandidate = MutationSupport.selectedCandidate(for: app, providerFilter: providerFilter)
+                if matchingCandidate == nil {
+                    let outcome = await coordinator.check(app: app, config: config, providerFilter: providerFilter)
+                    refreshed.append(outcome.record)
+                    await state.upsertApp(outcome.record)
+                } else {
+                    refreshed.append(app)
+                }
+            }
+            return refreshed
+        }
+
+        private func buildPlan(
+            for apps: [AppRecord],
+            selectors: [String],
+            providerFilter: Provider?,
+            reinstall: Bool,
+            state: StateService
+        ) async throws -> (MutationPlan, [MutationResult]) {
+            var actions: [PlanAction] = []
+            var preconditions: [PlanPrecondition] = []
+            var results: [MutationResult] = []
+
+            for app in apps {
+                guard let candidate = MutationSupport.selectedCandidate(for: app, providerFilter: providerFilter) else {
+                    results.append(MutationResult(appId: app.appId, selector: app.selectors.canonical, status: .validation_failed, message: "No update candidate available."))
+                    continue
+                }
+
+                if let skip = await state.isSkipped(appId: app.appId), skip.version == candidate.availableVersion {
+                    results.append(MutationResult(appId: app.appId, selector: app.selectors.canonical, status: .skipped, message: "Selected version is currently skipped."))
+                    continue
+                }
+
+                if !reinstall,
+                   let installedVersion = app.installedVersion,
+                   !VersionCompare.isNewer(candidate.availableVersion, than: installedVersion) {
+                    results.append(MutationResult(appId: app.appId, selector: app.selectors.canonical, status: .up_to_date, message: "App is already up to date."))
+                    continue
+                }
+
+                guard let action = buildAction(for: app, candidate: candidate) else {
+                    results.append(MutationResult(appId: app.appId, selector: app.selectors.canonical, status: .validation_failed, message: "Could not derive an executor action for the selected candidate."))
+                    continue
+                }
+
+                actions.append(action)
+                preconditions.append(PlanPrecondition(appId: app.appId, installedVersion: app.installedVersion, candidateVersion: candidate.availableVersion, provider: candidate.provider))
+                results.append(MutationResult(appId: app.appId, selector: app.selectors.canonical, status: .planned, message: "Planned update via \(candidate.provider.rawValue)."))
+            }
+
+            let requestedSelectors = selectors.isEmpty ? apps.map(\.selectors.canonical) : selectors
+            return (
+                MutationPlan(command: "apps.update", dryRun: true, requestedSelectors: requestedSelectors, resolvedAppIds: apps.map(\.appId), preconditions: preconditions, actions: actions),
+                results
+            )
+        }
+
+        private func buildAction(for app: AppRecord, candidate: UpdateCandidate) -> PlanAction? {
+            var details: [String: JSONValue] = [
+                "candidate_version": .string(candidate.availableVersion),
+                "provider": .string(candidate.provider.rawValue),
+                "app_path": .string(app.path),
+            ]
+            if let bundleId = app.bundleId {
+                details["bundle_id"] = .string(bundleId)
+            }
+            if let downloadURL = candidate.downloadUrl {
+                details["download_url"] = .string(downloadURL)
+            }
+
+            switch candidate.executor {
+            case .brew_cask:
+                guard let token = MutationSupport.stringValue(candidate.details["cask_token"]) else { return nil }
+                details["token"] = .string(token)
+                return PlanAction(type: "brew_upgrade_cask", appId: app.appId, token: token, details: details)
+            case .app_store:
+                guard let trackID = MutationSupport.stringValue(candidate.details["track_id"]) else { return nil }
+                details["track_id"] = .string(trackID)
+                return PlanAction(type: "mas_upgrade", appId: app.appId, details: details)
+            case .bundle_replace:
+                guard candidate.downloadUrl != nil else { return nil }
+                return PlanAction(type: "bundle_replace", appId: app.appId, details: details)
+            }
+        }
     }
 
     struct Adopt: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Adopt existing apps into Homebrew cask management.")
+
         @OptionGroup var global: GlobalOptions
-        mutating func run() async throws { throw PhasePendingError(command: "apps adopt") }
+        @Argument(help: "Optional selectors.") var selectors: [String] = []
+        @Flag(name: .long, help: "Target all tracked apps.") var all: Bool = false
+        @Option(name: .long, help: "Explicit cask token to adopt into.") var cask: String?
+        @Flag(name: .long, help: "Confirm execution without prompting.") var yes: Bool = false
+        @Flag(name: .long, help: "Force reinstall where supported.") var reinstall: Bool = false
+        @Flag(name: .long, help: "Preview the adoption plan without executing it.") var dryRun: Bool = false
+        @Option(name: .long, help: "Read a raw request or replayable plan from a file path or '-'.") var input: String?
+
+        mutating func run() async throws {
+            do {
+                let configService = ConfigService(configPath: global.config)
+                var config = try await configService.effectiveConfig()
+                if let timeout = global.timeout {
+                    config.timeout = timeout
+                }
+
+                try MutationSupport.ensureNoConflictingFlags(
+                    hasInput: input != nil,
+                    conflicting: !selectors.isEmpty || all || cask != nil,
+                    message: "apps adopt accepts either positional flags or --input, not both."
+                )
+
+                let timeoutSeconds = DurationParser.parseToSeconds(config.resolvedTimeout) ?? 30
+                let state = StateService()
+                try await state.load()
+                let brewSource = BrewSource(processRunner: ProcessRunner(timeout: timeoutSeconds))
+                let executor = UpdateExecutor(timeout: timeoutSeconds)
+
+                let plan: MutationPlan
+                let previewResults: [MutationResult]
+                let effectiveDryRun: Bool
+                let effectiveReinstall: Bool
+
+                if let input {
+                    switch try MutationSupport.decodeRequestOrPlan(path: input, as: AppsAdoptRequest.self, command: "apps.adopt") {
+                    case .plan(let existingPlan):
+                        plan = existingPlan
+                        previewResults = existingPlan.actions.compactMap { action in
+                            guard let appId = action.appId else { return nil }
+                            return MutationResult(appId: appId, selector: "id:\(appId)", status: .planned, message: "Planned adoption execution.")
+                        }
+                        effectiveDryRun = dryRun
+                        effectiveReinstall = reinstall
+                    case .request(let request):
+                        effectiveDryRun = dryRun || (request.dryRun ?? false)
+                        effectiveReinstall = reinstall || (request.reinstall ?? false)
+                        let requestedSelectors = request.selectors ?? selectors
+                        let requestAll = request.all ?? all
+                        let apps = try await resolveApps(for: requestedSelectors, all: requestAll, state: state)
+                        (plan, previewResults) = try await buildPlan(for: apps, selectors: requestedSelectors, explicitCask: request.cask ?? cask, brewSource: brewSource, config: config)
+                    }
+                } else {
+                    effectiveDryRun = dryRun
+                    effectiveReinstall = reinstall
+                    let apps = try await resolveApps(for: selectors, all: all, state: state)
+                    (plan, previewResults) = try await buildPlan(for: apps, selectors: selectors, explicitCask: cask, brewSource: brewSource, config: config)
+                }
+
+                if effectiveDryRun {
+                    try CLIPrinter.emitMutation(
+                        MutationEnvelope(command: "apps.adopt", dryRun: true, plan: try JSONValue.from(plan), results: previewResults),
+                        global: global
+                    )
+                    return
+                }
+
+                if !plan.actions.isEmpty {
+                    try MutationSupport.confirmIfNeeded(summary: "Adopt \(plan.actions.count) app(s)", yes: yes, noInput: global.noInput)
+                }
+
+                var results = previewResults.filter { $0.status != .planned }
+                for action in plan.actions {
+                    guard let appId = action.appId,
+                          let current = await state.getApp(id: appId) else {
+                        results.append(MutationResult(appId: action.appId ?? "unknown", selector: action.appId.map { "id:\($0)" } ?? "unknown", status: .runtime_failed, message: "App record not found for execution."))
+                        continue
+                    }
+
+                    if let precondition = plan.preconditions.first(where: { $0.appId == appId }), !precondition.validate(against: current) {
+                        results.append(MutationResult(appId: appId, selector: current.selectors.canonical, status: .precondition_failed, message: "Planned adoption preconditions no longer hold."))
+                        continue
+                    }
+
+                    let outcome = await executor.executeAdopt(action: action, record: current, config: config, reinstall: effectiveReinstall)
+                    results.append(outcome.result)
+                    if let updatedRecord = outcome.updatedRecord {
+                        await state.upsertApp(updatedRecord)
+                    }
+                }
+
+                try await state.save()
+                try CLIPrinter.emitMutation(
+                    MutationEnvelope(command: "apps.adopt", dryRun: false, plan: try JSONValue.from(plan), results: results),
+                    global: global
+                )
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+
+        private func resolveApps(for selectors: [String], all: Bool, state: StateService) async throws -> [AppRecord] {
+            if all {
+                return await state.allApps().filter { $0.trackingState == .active || $0.trackingState == .missing }
+            }
+            guard !selectors.isEmpty else {
+                throw UpdatestError.validation(code: "invalid_input", message: "apps adopt requires selectors or --all.")
+            }
+            let allowBare = isatty(STDIN_FILENO) != 0
+            let parsed = try SelectorParser.parseMany(selectors, allowBare: allowBare).get()
+            return try await state.resolveMany(selectors: parsed)
+        }
+
+        private func buildPlan(
+            for apps: [AppRecord],
+            selectors: [String],
+            explicitCask: String?,
+            brewSource: BrewSource,
+            config: UpdateConfig
+        ) async throws -> (MutationPlan, [MutationResult]) {
+            var actions: [PlanAction] = []
+            var preconditions: [PlanPrecondition] = []
+            var results: [MutationResult] = []
+
+            for app in apps {
+                let token: String?
+                if let explicitCask {
+                    token = explicitCask
+                } else {
+                    token = try await brewSource.findCaskToken(for: app, config: config)
+                }
+                guard let token else {
+                    results.append(MutationResult(appId: app.appId, selector: app.selectors.canonical, status: .validation_failed, message: "No Homebrew cask token found for adoption."))
+                    continue
+                }
+
+                let action = PlanAction(type: "brew_adopt_cask", appId: app.appId, token: token, details: ["token": .string(token)])
+                actions.append(action)
+                preconditions.append(PlanPrecondition(appId: app.appId, installedVersion: app.installedVersion, candidateVersion: nil, provider: nil))
+                results.append(MutationResult(appId: app.appId, selector: app.selectors.canonical, status: .planned, message: "Planned adoption into cask '\(token)'."))
+            }
+
+            let requestedSelectors = selectors.isEmpty ? apps.map(\.selectors.canonical) : selectors
+            return (
+                MutationPlan(command: "apps.adopt", dryRun: true, requestedSelectors: requestedSelectors, resolvedAppIds: apps.map(\.appId), preconditions: preconditions, actions: actions),
+                results
+            )
+        }
     }
 }
 
@@ -433,22 +830,249 @@ struct Ignores: AsyncParsableCommand {
     static let configuration = CommandConfiguration(subcommands: [List.self, Add.self, Remove.self])
     mutating func run() async throws { throw CleanExit.helpRequest(self) }
 
-    struct List: AsyncParsableCommand { mutating func run() async throws { throw PhasePendingError(command: "ignores list") } }
-    struct Add: AsyncParsableCommand { mutating func run() async throws { throw PhasePendingError(command: "ignores add") } }
-    struct Remove: AsyncParsableCommand { mutating func run() async throws { throw PhasePendingError(command: "ignores remove") } }
+    struct List: AsyncParsableCommand {
+        @OptionGroup var global: GlobalOptions
+
+        mutating func run() async throws {
+            do {
+                let state = StateService()
+                try await state.load()
+                var entries = await state.allIgnores()
+                if let limit = global.limit, limit >= 0 {
+                    entries = Array(entries.prefix(limit))
+                }
+                var warnings: [WarningObject] = []
+                if global.cursor != nil || global.allPages {
+                    warnings.append(.init(code: "ignored_pagination", message: "ignores list is not naturally paginated."))
+                }
+                try CLIPrinter.emitCollection(entries, global: global, warnings: warnings)
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+    }
+
+    struct Add: AsyncParsableCommand {
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "Selectors to ignore.") var selectors: [String] = []
+        @Option(name: .long, help: "Ignore scope: updates, adoption, all.") var scope: String = IgnoreScope.all.rawValue
+        @Option(name: .long, help: "Optional ignore reason.") var reason: String?
+        @Flag(name: .long, help: "Preview the ignore plan without writing.") var dryRun: Bool = false
+        @Option(name: .long, help: "Read a raw request from a file path or '-'.") var input: String?
+
+        mutating func run() async throws {
+            do {
+                try MutationSupport.ensureNoConflictingFlags(hasInput: input != nil, conflicting: !selectors.isEmpty || scope.lowercased() != IgnoreScope.all.rawValue || reason != nil, message: "ignores add accepts either positional flags or --input, not both.")
+                guard let parsedScope = IgnoreScope(rawValue: scope.lowercased()) else {
+                    throw UpdatestError.validation(code: "invalid_input", message: "Unknown ignore scope '\(scope)'.")
+                }
+
+                let request: IgnoreAddRequest?
+                if let input {
+                    request = try JSONCoders.decoder.decode(IgnoreAddRequest.self, from: MutationSupport.readInputData(path: input))
+                } else {
+                    request = nil
+                }
+
+                let effectiveDryRun = dryRun || (request?.dryRun ?? false)
+                let effectiveSelectors = request?.selectors ?? selectors
+                let effectiveReason = request?.reason ?? reason
+                let effectiveScope = IgnoreScope(rawValue: request?.scope?.lowercased() ?? parsedScope.rawValue) ?? parsedScope
+
+                guard !effectiveSelectors.isEmpty else {
+                    throw UpdatestError.validation(code: "invalid_input", message: "ignores add requires at least one selector.")
+                }
+
+                let state = StateService()
+                try await state.load()
+                let allowBare = isatty(STDIN_FILENO) != 0
+                let parsed = try SelectorParser.parseMany(effectiveSelectors, allowBare: allowBare).get()
+                let apps = try await state.resolveMany(selectors: parsed)
+                let plan = MutationPlan(
+                    command: "ignores.add",
+                    dryRun: effectiveDryRun,
+                    requestedSelectors: effectiveSelectors,
+                    resolvedAppIds: apps.map(\.appId),
+                    preconditions: [],
+                    actions: apps.map { PlanAction(type: "ignore_add", appId: $0.appId, details: ["scope": .string(effectiveScope.rawValue), "reason": effectiveReason.map(JSONValue.string) ?? .null]) }
+                )
+                let results = apps.map { MutationResult(appId: $0.appId, selector: $0.selectors.canonical, status: effectiveDryRun ? .planned : .ignored, message: effectiveDryRun ? "Would add ignore rule." : "Added ignore rule.") }
+                if !effectiveDryRun {
+                    for app in apps {
+                        await state.addIgnore(IgnoreEntry(appId: app.appId, scope: effectiveScope, reason: effectiveReason))
+                    }
+                    try await state.save()
+                }
+                try CLIPrinter.emitMutation(MutationEnvelope(command: "ignores.add", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: results), global: global)
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+    }
+
+    struct Remove: AsyncParsableCommand {
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "Selectors to unignore.") var selectors: [String] = []
+        @Flag(name: .long, help: "Preview the removal plan without writing.") var dryRun: Bool = false
+        @Option(name: .long, help: "Read a raw request from a file path or '-'.") var input: String?
+
+        mutating func run() async throws {
+            do {
+                try MutationSupport.ensureNoConflictingFlags(hasInput: input != nil, conflicting: !selectors.isEmpty, message: "ignores remove accepts either positional selectors or --input, not both.")
+                let request: SelectorListRequest?
+                if let input {
+                    request = try JSONCoders.decoder.decode(SelectorListRequest.self, from: MutationSupport.readInputData(path: input))
+                } else {
+                    request = nil
+                }
+                let effectiveDryRun = dryRun || (request?.dryRun ?? false)
+                let effectiveSelectors = request?.selectors ?? selectors
+                guard !effectiveSelectors.isEmpty else {
+                    throw UpdatestError.validation(code: "invalid_input", message: "ignores remove requires at least one selector.")
+                }
+
+                let state = StateService()
+                try await state.load()
+                let allowBare = isatty(STDIN_FILENO) != 0
+                let parsed = try SelectorParser.parseMany(effectiveSelectors, allowBare: allowBare).get()
+                let apps = try await state.resolveMany(selectors: parsed)
+                let plan = MutationPlan(command: "ignores.remove", dryRun: effectiveDryRun, requestedSelectors: effectiveSelectors, resolvedAppIds: apps.map(\.appId), preconditions: [], actions: apps.map { PlanAction(type: "ignore_remove", appId: $0.appId) })
+                let results = apps.map { MutationResult(appId: $0.appId, selector: $0.selectors.canonical, status: effectiveDryRun ? .planned : .updated, message: effectiveDryRun ? "Would remove ignore rule." : "Removed ignore rule.") }
+                if !effectiveDryRun {
+                    for app in apps {
+                        await state.removeIgnore(appId: app.appId)
+                    }
+                    try await state.save()
+                }
+                try CLIPrinter.emitMutation(MutationEnvelope(command: "ignores.remove", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: results), global: global)
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+    }
 }
 
 struct Skips: AsyncParsableCommand {
     static let configuration = CommandConfiguration(subcommands: [List.self, Add.self, Remove.self])
     mutating func run() async throws { throw CleanExit.helpRequest(self) }
 
-    struct List: AsyncParsableCommand { mutating func run() async throws { throw PhasePendingError(command: "skips list") } }
-    struct Add: AsyncParsableCommand { mutating func run() async throws { throw PhasePendingError(command: "skips add") } }
-    struct Remove: AsyncParsableCommand { mutating func run() async throws { throw PhasePendingError(command: "skips remove") } }
+    struct List: AsyncParsableCommand {
+        @OptionGroup var global: GlobalOptions
+
+        mutating func run() async throws {
+            do {
+                let state = StateService()
+                try await state.load()
+                var entries = await state.allSkips()
+                if let limit = global.limit, limit >= 0 {
+                    entries = Array(entries.prefix(limit))
+                }
+                var warnings: [WarningObject] = []
+                if global.cursor != nil || global.allPages {
+                    warnings.append(.init(code: "ignored_pagination", message: "skips list is not naturally paginated."))
+                }
+                try CLIPrinter.emitCollection(entries, global: global, warnings: warnings)
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+    }
+
+    struct Add: AsyncParsableCommand {
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "Selector to skip.") var selector: String?
+        @Option(name: .long, help: "Version to skip. Defaults to the selected candidate version.") var version: String?
+        @Option(name: .long, help: "Optional expiration duration.") var expiresIn: String?
+        @Flag(name: .long, help: "Preview the skip plan without writing.") var dryRun: Bool = false
+        @Option(name: .long, help: "Read a raw request from a file path or '-'.") var input: String?
+
+        mutating func run() async throws {
+            do {
+                try MutationSupport.ensureNoConflictingFlags(hasInput: input != nil, conflicting: selector != nil || version != nil || expiresIn != nil, message: "skips add accepts either positional flags or --input, not both.")
+                let request: SkipAddRequest?
+                if let input {
+                    request = try JSONCoders.decoder.decode(SkipAddRequest.self, from: MutationSupport.readInputData(path: input))
+                } else {
+                    request = nil
+                }
+                let effectiveDryRun = dryRun || (request?.dryRun ?? false)
+                guard let effectiveSelector = request?.selector ?? selector else {
+                    throw UpdatestError.validation(code: "invalid_input", message: "skips add requires a selector.")
+                }
+
+                let state = StateService()
+                try await state.load()
+                let allowBare = isatty(STDIN_FILENO) != 0
+                let parsed = try SelectorParser.parse(effectiveSelector, allowBare: allowBare).get()
+                let app = try await state.resolve(selector: parsed)
+                let effectiveVersion = request?.version ?? version ?? app.selectedCandidate?.availableVersion
+                guard let effectiveVersion else {
+                    throw UpdatestError.validation(code: "invalid_input", message: "No version available to skip.")
+                }
+                let effectiveExpiresIn = request?.expiresIn ?? expiresIn
+                let plan = MutationPlan(command: "skips.add", dryRun: effectiveDryRun, requestedSelectors: [effectiveSelector], resolvedAppIds: [app.appId], preconditions: [], actions: [PlanAction(type: "skip_add", appId: app.appId, details: ["version": .string(effectiveVersion), "expires_in": effectiveExpiresIn.map(JSONValue.string) ?? .null])])
+                let result = MutationResult(appId: app.appId, selector: app.selectors.canonical, status: effectiveDryRun ? .planned : .skipped, message: effectiveDryRun ? "Would add version skip." : "Added version skip.")
+                if !effectiveDryRun {
+                    await state.addSkip(SkipEntry(appId: app.appId, version: effectiveVersion, expiresIn: effectiveExpiresIn))
+                    try await state.save()
+                }
+                try CLIPrinter.emitMutation(MutationEnvelope(command: "skips.add", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: [result]), global: global)
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+    }
+
+    struct Remove: AsyncParsableCommand {
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "Selectors to remove skips for.") var selectors: [String] = []
+        @Flag(name: .long, help: "Preview the removal plan without writing.") var dryRun: Bool = false
+        @Option(name: .long, help: "Read a raw request from a file path or '-'.") var input: String?
+
+        mutating func run() async throws {
+            do {
+                try MutationSupport.ensureNoConflictingFlags(hasInput: input != nil, conflicting: !selectors.isEmpty, message: "skips remove accepts either positional selectors or --input, not both.")
+                let request: SelectorListRequest?
+                if let input {
+                    request = try JSONCoders.decoder.decode(SelectorListRequest.self, from: MutationSupport.readInputData(path: input))
+                } else {
+                    request = nil
+                }
+                let effectiveDryRun = dryRun || (request?.dryRun ?? false)
+                let effectiveSelectors = request?.selectors ?? selectors
+                guard !effectiveSelectors.isEmpty else {
+                    throw UpdatestError.validation(code: "invalid_input", message: "skips remove requires at least one selector.")
+                }
+
+                let state = StateService()
+                try await state.load()
+                let allowBare = isatty(STDIN_FILENO) != 0
+                let parsed = try SelectorParser.parseMany(effectiveSelectors, allowBare: allowBare).get()
+                let apps = try await state.resolveMany(selectors: parsed)
+                let plan = MutationPlan(command: "skips.remove", dryRun: effectiveDryRun, requestedSelectors: effectiveSelectors, resolvedAppIds: apps.map(\.appId), preconditions: [], actions: apps.map { PlanAction(type: "skip_remove", appId: $0.appId) })
+                let results = apps.map { MutationResult(appId: $0.appId, selector: $0.selectors.canonical, status: effectiveDryRun ? .planned : .updated, message: effectiveDryRun ? "Would remove version skip." : "Removed version skip.") }
+                if !effectiveDryRun {
+                    for app in apps {
+                        await state.removeSkip(appId: app.appId)
+                    }
+                    try await state.save()
+                }
+                try CLIPrinter.emitMutation(MutationEnvelope(command: "skips.remove", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: results), global: global)
+            } catch let error as UpdatestError {
+                CLIPrinter.printError(error, global: global)
+                throw ExitCode(error.exitCode.rawValue)
+            }
+        }
+    }
 }
 
 struct Scan: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(subcommands: [Run.self])
+    static let configuration = CommandConfiguration(subcommands: [Run.self], defaultSubcommand: Run.self)
     mutating func run() async throws { throw CleanExit.helpRequest(self) }
 
     struct Run: AsyncParsableCommand {
@@ -513,7 +1137,7 @@ struct Scan: AsyncParsableCommand {
 }
 
 struct Doctor: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(subcommands: [Run.self])
+    static let configuration = CommandConfiguration(subcommands: [Run.self], defaultSubcommand: Run.self)
     mutating func run() async throws { throw CleanExit.helpRequest(self) }
 
     struct Run: AsyncParsableCommand {
@@ -993,5 +1617,12 @@ struct Schema: AsyncParsableCommand {
 
 struct Completions: AsyncParsableCommand {
     @Argument(help: "Target shell.") var shell: String
-    mutating func run() async throws { throw PhasePendingError(command: "completions") }
+
+    mutating func run() async throws {
+        guard let completionShell = CompletionShell(rawValue: shell) else {
+            CLIPrinter.printError(.validation(code: "invalid_input", message: "Unsupported shell '\(shell)'. Use one of: bash, zsh, fish."), global: GlobalOptions())
+            throw ExitCode(ExitCode.invalidUsage.rawValue)
+        }
+        Swift.print(UpdateCLI.completionScript(for: completionShell))
+    }
 }

@@ -24,5 +24,10 @@ let package = Package(
             name: "UpdateCore",
             path: "Sources/UpdatestCore"
         ),
+        .testTarget(
+            name: "UpdateCoreTests",
+            dependencies: ["UpdateCore"],
+            path: "Tests/UpdateCoreTests"
+        ),
     ]
 )

@@ -8,7 +8,7 @@ public actor AppStoreSource: UpdateSource {
         self.processRunner = processRunner
     }
 
-    public func checkForUpdate(app: AppRecord, config: UpdatestConfig) async throws -> [UpdateCandidate] {
+    public func checkForUpdate(app: AppRecord, config: UpdateConfig) async throws -> [UpdateCandidate] {
         guard let bundleId = app.bundleId else { return [] }
 
         // Query iTunes lookup API
@@ -25,6 +25,7 @@ public actor AppStoreSource: UpdateSource {
         else { return [] }
 
         let trackViewUrl = result["trackViewUrl"] as? String
+        let trackID = result["trackId"]
         let now = ISO8601DateFormatter().string(from: Date())
 
         let isNewer = app.installedVersion.map {
@@ -38,6 +39,13 @@ public actor AppStoreSource: UpdateSource {
             if masResult { confidence = .high }
         }
 
+        var details: [String: JSONValue] = trackViewUrl.map { ["track_url": .string($0)] } ?? [:]
+        if let trackID = trackID as? Int {
+            details["track_id"] = .int(trackID)
+        } else if let trackID = trackID as? String {
+            details["track_id"] = .string(trackID)
+        }
+
         return [UpdateCandidate(
             provider: .appstore,
             executor: .app_store,
@@ -49,11 +57,16 @@ public actor AppStoreSource: UpdateSource {
             checkedAt: now,
             selectionReasonCodes: isNewer ? ["newer_version"] : ["up_to_date"],
             rejectionReasonCodes: isNewer ? [] : ["not_newer"],
-            details: trackViewUrl.map { ["track_url": .string($0)] } ?? [:]
+            details: details
         )]
     }
 
-    private func checkMas(bundleId: String, config: UpdatestConfig) async throws -> Bool {
+    public func upgradeApp(trackID: String, config: UpdateConfig) async throws -> ProcessResult {
+        let masPath = config.masPath ?? "mas"
+        return try await processRunner.runCommand(masPath, arguments: ["upgrade", trackID])
+    }
+
+    private func checkMas(bundleId: String, config: UpdateConfig) async throws -> Bool {
         let masPath = config.masPath ?? "mas"
         let result = try await processRunner.runCommand(masPath, arguments: ["outdated"])
         guard result.succeeded else { return false }
