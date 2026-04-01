@@ -292,14 +292,14 @@ swift run update apps update 'name:Google Chrome' --provider brew --dry-run --fo
 scripts/
 Package.swift
 Sources/
-  updatest/
-  UpdatestCore/
+  update/
+  UpdateCore/
 Tests/
   UpdateCoreTests/
 ```
 
-- `Sources/updatest/` contains the CLI entrypoints and command wiring
-- `Sources/UpdatestCore/` contains the models, services, coordinators, and provider logic
+- `Sources/update/` contains the CLI entrypoints and command wiring
+- `Sources/UpdateCore/` contains the models, services, coordinators, and provider logic
 - `scripts/` contains packaging, installer, and tap update scripts
 - `Tests/UpdateCoreTests/` contains core regression tests
 

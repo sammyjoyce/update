@@ -17,12 +17,10 @@ let package = Package(
             dependencies: [
                 "UpdateCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ],
-            path: "Sources/updatest"
+            ]
         ),
         .target(
-            name: "UpdateCore",
-            path: "Sources/UpdatestCore"
+            name: "UpdateCore"
         ),
         .testTarget(
             name: "UpdateCoreTests",
