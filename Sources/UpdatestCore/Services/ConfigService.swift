@@ -26,19 +26,19 @@ public actor ConfigService {
 
     // MARK: - Load
 
-    public func loadConfig(scope: ConfigScope) throws -> UpdatestConfig {
+    public func loadConfig(scope: ConfigScope) throws -> UpdateConfig {
         switch scope {
         case .user:
-            return try loadFile(at: userConfigPath) ?? UpdatestConfig()
+            return try loadFile(at: userConfigPath) ?? UpdateConfig()
         case .project:
-            return try loadFile(at: projectConfigPath) ?? UpdatestConfig()
+            return try loadFile(at: projectConfigPath) ?? UpdateConfig()
         case .effective:
             return try effectiveConfig()
         }
     }
 
-    public func effectiveConfig() throws -> UpdatestConfig {
-        var config = UpdatestConfig.defaults
+    public func effectiveConfig() throws -> UpdateConfig {
+        var config = UpdateConfig.defaults
 
         // Layer 1: user config
         if let user = try loadFile(at: userConfigPath) {
@@ -94,50 +94,50 @@ public actor ConfigService {
 
     public func setValue(_ key: String, value: String, scope: ConfigScope) throws {
         guard scope != .effective else {
-            throw UpdatestError.validation(
+            throw UpdateError.validation(
                 code: "invalid_scope",
                 message: "Cannot write to 'effective' scope. Use 'user' or 'project'."
             )
         }
 
         let path = scope == .user ? userConfigPath : projectConfigPath
-        var config = try loadFile(at: path) ?? UpdatestConfig()
+        var config = try loadFile(at: path) ?? UpdateConfig()
         try setConfigKey(&config, key: key, value: value)
         try saveFile(config, at: path)
     }
 
     public func setFromJSON(_ jsonData: Data, scope: ConfigScope) throws {
         guard scope != .effective else {
-            throw UpdatestError.validation(
+            throw UpdateError.validation(
                 code: "invalid_scope",
                 message: "Cannot write to 'effective' scope. Use 'user' or 'project'."
             )
         }
 
         let path = scope == .user ? userConfigPath : projectConfigPath
-        var existing = try loadFile(at: path) ?? UpdatestConfig()
-        let overlay = try JSONCoders.decoder.decode(UpdatestConfig.self, from: jsonData)
+        var existing = try loadFile(at: path) ?? UpdateConfig()
+        let overlay = try JSONCoders.decoder.decode(UpdateConfig.self, from: jsonData)
         existing = existing.merging(with: overlay)
         try saveFile(existing, at: path)
     }
 
     public func unsetValue(_ key: String, scope: ConfigScope) throws {
         guard scope != .effective else {
-            throw UpdatestError.validation(
+            throw UpdateError.validation(
                 code: "invalid_scope",
                 message: "Cannot unset from 'effective' scope. Use 'user' or 'project'."
             )
         }
 
         let path = scope == .user ? userConfigPath : projectConfigPath
-        var config = try loadFile(at: path) ?? UpdatestConfig()
+        var config = try loadFile(at: path) ?? UpdateConfig()
         try unsetConfigKey(&config, key: key)
         try saveFile(config, at: path)
     }
 
     public func reset(key: String?, scope: ConfigScope) throws {
         guard scope != .effective else {
-            throw UpdatestError.validation(
+            throw UpdateError.validation(
                 code: "invalid_scope",
                 message: "Cannot reset 'effective' scope. Use 'user' or 'project'."
             )
@@ -146,24 +146,24 @@ public actor ConfigService {
         let path = scope == .user ? userConfigPath : projectConfigPath
 
         if let key {
-            var config = try loadFile(at: path) ?? UpdatestConfig()
+            var config = try loadFile(at: path) ?? UpdateConfig()
             try unsetConfigKey(&config, key: key)
             try saveFile(config, at: path)
         } else {
-            try saveFile(UpdatestConfig(), at: path)
+            try saveFile(UpdateConfig(), at: path)
         }
     }
 
     // MARK: - Private
 
-    private func loadFile(at path: String) throws -> UpdatestConfig? {
+    private func loadFile(at path: String) throws -> UpdateConfig? {
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         let data = try Data(contentsOf: url)
-        return try JSONCoders.decoder.decode(UpdatestConfig.self, from: data)
+        return try JSONCoders.decoder.decode(UpdateConfig.self, from: data)
     }
 
-    private func saveFile(_ config: UpdatestConfig, at path: String) throws {
+    private func saveFile(_ config: UpdateConfig, at path: String) throws {
         let dir = (path as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(
             atPath: dir,
@@ -174,7 +174,7 @@ public actor ConfigService {
         try data.write(to: URL(fileURLWithPath: path))
     }
 
-    private func applyEnvironment(to config: UpdatestConfig) -> UpdatestConfig {
+    private func applyEnvironment(to config: UpdateConfig) -> UpdateConfig {
         var c = config
         let env = ProcessInfo.processInfo.environment
         if let v = env["UPDATEST_LOCATIONS"] {
@@ -187,7 +187,7 @@ public actor ConfigService {
         return c
     }
 
-    private func setConfigKey(_ config: inout UpdatestConfig, key: String, value: String) throws {
+    private func setConfigKey(_ config: inout UpdateConfig, key: String, value: String) throws {
         switch key {
         case "locations":
             config.locations = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -202,7 +202,7 @@ public actor ConfigService {
         case "proxy": config.proxy = value
         case "metadata_sync_enabled": config.metadataSyncEnabled = (value == "true")
         default:
-            throw UpdatestError.validation(
+            throw UpdateError.validation(
                 code: "invalid_config_key",
                 message: "Unknown config key '\(key)'.",
                 hint: "Run `update schema config` to see available keys."
@@ -210,7 +210,7 @@ public actor ConfigService {
         }
     }
 
-    private func unsetConfigKey(_ config: inout UpdatestConfig, key: String) throws {
+    private func unsetConfigKey(_ config: inout UpdateConfig, key: String) throws {
         switch key {
         case "locations": config.locations = nil
         case "brew_path": config.brewPath = nil
@@ -224,7 +224,7 @@ public actor ConfigService {
         case "metadata_sync_enabled": config.metadataSyncEnabled = nil
         case "manual_sources": config.manualSources = nil
         default:
-            throw UpdatestError.validation(
+            throw UpdateError.validation(
                 code: "invalid_config_key",
                 message: "Unknown config key '\(key)'."
             )

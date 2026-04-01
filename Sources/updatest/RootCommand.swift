@@ -68,7 +68,7 @@ struct GlobalOptions: ParsableArguments {
 }
 
 enum CLIPrinter {
-    static func printError(_ error: UpdatestError, global: GlobalOptions) {
+    static func printError(_ error: UpdateError, global: GlobalOptions) {
         let envelope = ErrorEnvelope(error.toDetail(traceId: global.resolvedTraceId))
         let resolvedFormat = global.resolvedFormat(isCollection: false)
         switch resolvedFormat {
@@ -284,7 +284,7 @@ struct Apps: AsyncParsableCommand {
                     warnings.append(.init(code: "ignored_pagination", message: "apps list is not naturally paginated."))
                 }
                 try CLIPrinter.emitCollection(apps, global: global, warnings: warnings)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -304,7 +304,7 @@ struct Apps: AsyncParsableCommand {
                 let parsed = try SelectorParser.parse(selector, allowBare: allowBare).get()
                 let app = try await state.resolve(selector: parsed)
                 try CLIPrinter.emitItem(app, global: global)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -337,7 +337,7 @@ struct Apps: AsyncParsableCommand {
                 } else if let known = Provider(rawValue: providerValue) {
                     parsedProvider = known
                 } else {
-                    throw UpdatestError.validation(
+                    throw UpdateError.validation(
                         code: "invalid_input",
                         message: "Unknown provider '\(provider)'."
                     )
@@ -384,7 +384,7 @@ struct Apps: AsyncParsableCommand {
 
                 try await state.save()
                 try CLIPrinter.emitCollection(checkedApps, global: global, warnings: warnings)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -424,7 +424,7 @@ struct Apps: AsyncParsableCommand {
                 }
 
                 try CLIPrinter.emitItem(app, global: global, warnings: warnings)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -552,7 +552,7 @@ struct Apps: AsyncParsableCommand {
                     MutationEnvelope(command: "apps.update", dryRun: false, plan: try JSONValue.from(plan), results: results),
                     global: global
                 )
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -563,7 +563,7 @@ struct Apps: AsyncParsableCommand {
                 return await state.allApps().filter { $0.trackingState == .active || $0.trackingState == .missing }
             }
             guard !selectors.isEmpty else {
-                throw UpdatestError.validation(code: "invalid_input", message: "apps update requires selectors or --all.")
+                throw UpdateError.validation(code: "invalid_input", message: "apps update requires selectors or --all.")
             }
             let allowBare = isatty(STDIN_FILENO) != 0
             let parsed = try SelectorParser.parseMany(selectors, allowBare: allowBare).get()
@@ -765,7 +765,7 @@ struct Apps: AsyncParsableCommand {
                     MutationEnvelope(command: "apps.adopt", dryRun: false, plan: try JSONValue.from(plan), results: results),
                     global: global
                 )
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -776,7 +776,7 @@ struct Apps: AsyncParsableCommand {
                 return await state.allApps().filter { $0.trackingState == .active || $0.trackingState == .missing }
             }
             guard !selectors.isEmpty else {
-                throw UpdatestError.validation(code: "invalid_input", message: "apps adopt requires selectors or --all.")
+                throw UpdateError.validation(code: "invalid_input", message: "apps adopt requires selectors or --all.")
             }
             let allowBare = isatty(STDIN_FILENO) != 0
             let parsed = try SelectorParser.parseMany(selectors, allowBare: allowBare).get()
@@ -841,7 +841,7 @@ struct Ignores: AsyncParsableCommand {
                     warnings.append(.init(code: "ignored_pagination", message: "ignores list is not naturally paginated."))
                 }
                 try CLIPrinter.emitCollection(entries, global: global, warnings: warnings)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -860,7 +860,7 @@ struct Ignores: AsyncParsableCommand {
             do {
                 try MutationSupport.ensureNoConflictingFlags(hasInput: input != nil, conflicting: !selectors.isEmpty || scope.lowercased() != IgnoreScope.all.rawValue || reason != nil, message: "ignores add accepts either positional flags or --input, not both.")
                 guard let parsedScope = IgnoreScope(rawValue: scope.lowercased()) else {
-                    throw UpdatestError.validation(code: "invalid_input", message: "Unknown ignore scope '\(scope)'.")
+                    throw UpdateError.validation(code: "invalid_input", message: "Unknown ignore scope '\(scope)'.")
                 }
 
                 let request: IgnoreAddRequest?
@@ -876,7 +876,7 @@ struct Ignores: AsyncParsableCommand {
                 let effectiveScope = IgnoreScope(rawValue: request?.scope?.lowercased() ?? parsedScope.rawValue) ?? parsedScope
 
                 guard !effectiveSelectors.isEmpty else {
-                    throw UpdatestError.validation(code: "invalid_input", message: "ignores add requires at least one selector.")
+                    throw UpdateError.validation(code: "invalid_input", message: "ignores add requires at least one selector.")
                 }
 
                 let state = StateService()
@@ -900,7 +900,7 @@ struct Ignores: AsyncParsableCommand {
                     try await state.save()
                 }
                 try CLIPrinter.emitMutation(MutationEnvelope(command: "ignores.add", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: results), global: global)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -925,7 +925,7 @@ struct Ignores: AsyncParsableCommand {
                 let effectiveDryRun = dryRun || (request?.dryRun ?? false)
                 let effectiveSelectors = request?.selectors ?? selectors
                 guard !effectiveSelectors.isEmpty else {
-                    throw UpdatestError.validation(code: "invalid_input", message: "ignores remove requires at least one selector.")
+                    throw UpdateError.validation(code: "invalid_input", message: "ignores remove requires at least one selector.")
                 }
 
                 let state = StateService()
@@ -942,7 +942,7 @@ struct Ignores: AsyncParsableCommand {
                     try await state.save()
                 }
                 try CLIPrinter.emitMutation(MutationEnvelope(command: "ignores.remove", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: results), global: global)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -970,7 +970,7 @@ struct Skips: AsyncParsableCommand {
                     warnings.append(.init(code: "ignored_pagination", message: "skips list is not naturally paginated."))
                 }
                 try CLIPrinter.emitCollection(entries, global: global, warnings: warnings)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -996,7 +996,7 @@ struct Skips: AsyncParsableCommand {
                 }
                 let effectiveDryRun = dryRun || (request?.dryRun ?? false)
                 guard let effectiveSelector = request?.selector ?? selector else {
-                    throw UpdatestError.validation(code: "invalid_input", message: "skips add requires a selector.")
+                    throw UpdateError.validation(code: "invalid_input", message: "skips add requires a selector.")
                 }
 
                 let state = StateService()
@@ -1006,7 +1006,7 @@ struct Skips: AsyncParsableCommand {
                 let app = try await state.resolve(selector: parsed)
                 let effectiveVersion = request?.version ?? version ?? app.selectedCandidate?.availableVersion
                 guard let effectiveVersion else {
-                    throw UpdatestError.validation(code: "invalid_input", message: "No version available to skip.")
+                    throw UpdateError.validation(code: "invalid_input", message: "No version available to skip.")
                 }
                 let effectiveExpiresIn = request?.expiresIn ?? expiresIn
                 let plan = MutationPlan(command: "skips.add", dryRun: effectiveDryRun, requestedSelectors: [effectiveSelector], resolvedAppIds: [app.appId], preconditions: [], actions: [PlanAction(type: "skip_add", appId: app.appId, details: ["version": .string(effectiveVersion), "expires_in": effectiveExpiresIn.map(JSONValue.string) ?? .null])])
@@ -1016,7 +1016,7 @@ struct Skips: AsyncParsableCommand {
                     try await state.save()
                 }
                 try CLIPrinter.emitMutation(MutationEnvelope(command: "skips.add", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: [result]), global: global)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -1041,7 +1041,7 @@ struct Skips: AsyncParsableCommand {
                 let effectiveDryRun = dryRun || (request?.dryRun ?? false)
                 let effectiveSelectors = request?.selectors ?? selectors
                 guard !effectiveSelectors.isEmpty else {
-                    throw UpdatestError.validation(code: "invalid_input", message: "skips remove requires at least one selector.")
+                    throw UpdateError.validation(code: "invalid_input", message: "skips remove requires at least one selector.")
                 }
 
                 let state = StateService()
@@ -1058,7 +1058,7 @@ struct Skips: AsyncParsableCommand {
                     try await state.save()
                 }
                 try CLIPrinter.emitMutation(MutationEnvelope(command: "skips.remove", dryRun: effectiveDryRun, plan: try JSONValue.from(plan), results: results), global: global)
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -1123,7 +1123,7 @@ struct Scan: AsyncParsableCommand {
                     ),
                     global: global
                 )
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -1223,7 +1223,7 @@ struct ConfigGroup: AsyncParsableCommand {
         mutating func run() async throws {
             do {
                 guard let parsedScope = ConfigScope(rawValue: scope.lowercased()) else {
-                    throw UpdatestError.validation(code: "invalid_scope", message: "Unknown scope '\(scope)'.")
+                    throw UpdateError.validation(code: "invalid_scope", message: "Unknown scope '\(scope)'.")
                 }
                 let service = ConfigService(configPath: global.config)
                 if origin && parsedScope == .effective {
@@ -1235,7 +1235,7 @@ struct ConfigGroup: AsyncParsableCommand {
                     let config = try await service.loadConfig(scope: parsedScope)
                     try CLIPrinter.emitItem(config, global: global)
                 }
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -1251,16 +1251,16 @@ struct ConfigGroup: AsyncParsableCommand {
         mutating func run() async throws {
             do {
                 guard ConfigKeySpec.all.contains(where: { $0.key == key }) else {
-                    throw UpdatestError.validation(code: "invalid_config_key", message: "Unknown config key '\(key)'.")
+                    throw UpdateError.validation(code: "invalid_config_key", message: "Unknown config key '\(key)'.")
                 }
                 guard let parsedScope = ConfigScope(rawValue: scope.lowercased()) else {
-                    throw UpdatestError.validation(code: "invalid_scope", message: "Unknown scope '\(scope)'.")
+                    throw UpdateError.validation(code: "invalid_scope", message: "Unknown scope '\(scope)'.")
                 }
                 let service = ConfigService(configPath: global.config)
                 if origin && parsedScope == .effective {
                     let entries = try await service.effectiveConfigWithOrigins()
                     guard let match = entries.first(where: { $0.key == key }) else {
-                        throw UpdatestError.notFound(message: "No effective config value found for '\(key)'.")
+                        throw UpdateError.notFound(message: "No effective config value found for '\(key)'.")
                     }
                     try CLIPrinter.emitItem(
                         KeyValueEntry(key: match.key, value: match.value, scope: parsedScope.rawValue, origin: match.origin),
@@ -1274,7 +1274,7 @@ struct ConfigGroup: AsyncParsableCommand {
                         global: global
                     )
                 }
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -1292,7 +1292,7 @@ struct ConfigGroup: AsyncParsableCommand {
         mutating func run() async throws {
             do {
                 guard let parsedScope = ConfigScope(rawValue: scope.lowercased()), parsedScope != .effective else {
-                    throw UpdatestError.validation(code: "invalid_scope", message: "config set requires --scope user or --scope project.")
+                    throw UpdateError.validation(code: "invalid_scope", message: "config set requires --scope user or --scope project.")
                 }
                 let service = ConfigService(configPath: global.config)
                 let plan = MutationPlan(
@@ -1315,7 +1315,7 @@ struct ConfigGroup: AsyncParsableCommand {
                 if !dryRun {
                     if let input {
                         guard key == nil && value == nil else {
-                            throw UpdatestError.validation(code: "conflicting_input", message: "config set accepts either <key> <value> or --input, not both.")
+                            throw UpdateError.validation(code: "conflicting_input", message: "config set accepts either <key> <value> or --input, not both.")
                         }
                         let data: Data
                         if input == "-" {
@@ -1326,7 +1326,7 @@ struct ConfigGroup: AsyncParsableCommand {
                         try await service.setFromJSON(data, scope: parsedScope)
                     } else {
                         guard let key, let value else {
-                            throw UpdatestError.validation(code: "invalid_input", message: "config set requires either <key> <value> or --input.")
+                            throw UpdateError.validation(code: "invalid_input", message: "config set requires either <key> <value> or --input.")
                         }
                         try await service.setValue(key, value: value, scope: parsedScope)
                     }
@@ -1337,7 +1337,7 @@ struct ConfigGroup: AsyncParsableCommand {
                     MutationEnvelope(command: "config.set", dryRun: dryRun, plan: try JSONValue.from(plan), results: [result]),
                     global: global
                 )
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -1353,7 +1353,7 @@ struct ConfigGroup: AsyncParsableCommand {
         mutating func run() async throws {
             do {
                 guard let parsedScope = ConfigScope(rawValue: scope.lowercased()), parsedScope != .effective else {
-                    throw UpdatestError.validation(code: "invalid_scope", message: "config unset requires --scope user or --scope project.")
+                    throw UpdateError.validation(code: "invalid_scope", message: "config unset requires --scope user or --scope project.")
                 }
                 let service = ConfigService(configPath: global.config)
                 let plan = MutationPlan(
@@ -1375,7 +1375,7 @@ struct ConfigGroup: AsyncParsableCommand {
                     MutationEnvelope(command: "config.unset", dryRun: dryRun, plan: try JSONValue.from(plan), results: [result]),
                     global: global
                 )
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }
@@ -1392,10 +1392,10 @@ struct ConfigGroup: AsyncParsableCommand {
         mutating func run() async throws {
             do {
                 guard let parsedScope = ConfigScope(rawValue: scope.lowercased()), parsedScope != .effective else {
-                    throw UpdatestError.validation(code: "invalid_scope", message: "config reset requires --scope user or --scope project.")
+                    throw UpdateError.validation(code: "invalid_scope", message: "config reset requires --scope user or --scope project.")
                 }
                 if key == nil && !yes {
-                    throw UpdatestError.confirmationRequired(message: "Full config reset requires --yes.")
+                    throw UpdateError.confirmationRequired(message: "Full config reset requires --yes.")
                 }
 
                 let service = ConfigService(configPath: global.config)
@@ -1418,7 +1418,7 @@ struct ConfigGroup: AsyncParsableCommand {
                     MutationEnvelope(command: "config.reset", dryRun: dryRun, plan: try JSONValue.from(plan), results: [result]),
                     global: global
                 )
-            } catch let error as UpdatestError {
+            } catch let error as UpdateError {
                 CLIPrinter.printError(error, global: global)
                 throw ExitCode(error.exitCode.rawValue)
             }

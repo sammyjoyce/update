@@ -22,7 +22,7 @@ public struct ParsedSelector: Sendable, Equatable {
 public enum SelectorParser {
     /// Parse a typed selector string like `id:abc`, `bundle:com.example`, `path:/Applications/X.app`, `name:Firefox`.
     /// Returns a structured error for invalid input.
-    public static func parse(_ input: String, allowBare: Bool = false) -> Result<ParsedSelector, UpdatestError> {
+    public static func parse(_ input: String, allowBare: Bool = false) -> Result<ParsedSelector, UpdateError> {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
 
         guard !trimmed.isEmpty else {
@@ -101,7 +101,7 @@ public enum SelectorParser {
     /// Parse multiple selectors.
     public static func parseMany(
         _ inputs: [String], allowBare: Bool = false
-    ) -> Result<[ParsedSelector], UpdatestError> {
+    ) -> Result<[ParsedSelector], UpdateError> {
         var results: [ParsedSelector] = []
         for input in inputs {
             switch parse(input, allowBare: allowBare) {
@@ -112,7 +112,7 @@ public enum SelectorParser {
         return .success(results)
     }
 
-    private static func validatePathSelector(_ value: String) -> Result<ParsedSelector, UpdatestError> {
+    private static func validatePathSelector(_ value: String) -> Result<ParsedSelector, UpdateError> {
         guard value.hasPrefix("/") else {
             return .failure(.validation(
                 code: "invalid_path_selector",

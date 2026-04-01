@@ -50,13 +50,13 @@ public actor StateService {
     public func resolve(selector: ParsedSelector) throws -> AppRecord {
         let matches = findApps(selector: selector)
         if matches.isEmpty {
-            throw UpdatestError.notFound(
+            throw UpdateError.notFound(
                 message: "No app found matching '\(selector.description)'.",
                 details: ["selector": .string(selector.description)]
             )
         }
         if matches.count > 1 {
-            throw UpdatestError.ambiguous(
+            throw UpdateError.ambiguous(
                 message: "Selector '\(selector.description)' matches \(matches.count) apps.",
                 details: [
                     "selector": .string(selector.description),

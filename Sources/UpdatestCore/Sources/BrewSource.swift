@@ -9,7 +9,7 @@ public actor BrewSource: UpdateSource {
         self.processRunner = processRunner
     }
 
-    public func checkForUpdate(app: AppRecord, config: UpdatestConfig) async throws -> [UpdateCandidate] {
+    public func checkForUpdate(app: AppRecord, config: UpdateConfig) async throws -> [UpdateCandidate] {
         let casks = try await loadCasks(config: config)
 
         // Match by bundle ID first, then by name
@@ -46,7 +46,7 @@ public actor BrewSource: UpdateSource {
     }
 
     /// Check if a cask token exists for a given app.
-    public func findCaskToken(for app: AppRecord, config: UpdatestConfig) async throws -> String? {
+    public func findCaskToken(for app: AppRecord, config: UpdateConfig) async throws -> String? {
         let casks = try await loadCasks(config: config)
         let match = casks.first(where: { cask in
             if let bundleId = app.bundleId { return cask.bundleId == bundleId }
@@ -57,7 +57,7 @@ public actor BrewSource: UpdateSource {
         return match?.token
     }
 
-    private func loadCasks(config: UpdatestConfig, forceRefresh: Bool = false) async throws -> [BrewCaskInfo] {
+    private func loadCasks(config: UpdateConfig, forceRefresh: Bool = false) async throws -> [BrewCaskInfo] {
         if let cached = caskCache, !forceRefresh { return cached }
 
         let brewPath = config.brewPath ?? "/opt/homebrew/bin/brew"
@@ -68,7 +68,7 @@ public actor BrewSource: UpdateSource {
         )
 
         guard result.succeeded else {
-            throw UpdatestError.runtime(
+            throw UpdateError.runtime(
                 code: "tool_missing",
                 message: "Homebrew not available or failed: \(result.stderr.prefix(200))"
             )
@@ -80,7 +80,7 @@ public actor BrewSource: UpdateSource {
     }
 
     /// Get outdated casks from brew.
-    public func getOutdated(config: UpdatestConfig, skipUpdate: Bool = false) async throws -> [BrewOutdatedCask] {
+    public func getOutdated(config: UpdateConfig, skipUpdate: Bool = false) async throws -> [BrewOutdatedCask] {
         let brewPath = config.brewPath ?? "/opt/homebrew/bin/brew"
 
         if !skipUpdate {
@@ -113,7 +113,7 @@ public actor BrewSource: UpdateSource {
 
     /// Run brew upgrade for a cask.
     public func upgradeCask(
-        token: String, config: UpdatestConfig, reinstall: Bool = false, noQuarantine: Bool = false
+        token: String, config: UpdateConfig, reinstall: Bool = false, noQuarantine: Bool = false
     ) async throws -> ProcessResult {
         let brewPath = config.brewPath ?? "/opt/homebrew/bin/brew"
         var args = [reinstall ? "reinstall" : "upgrade", "--cask", token]
@@ -125,7 +125,7 @@ public actor BrewSource: UpdateSource {
 
     /// Run brew install --adopt for a cask.
     public func adoptCask(
-        token: String, config: UpdatestConfig, reinstall: Bool = false
+        token: String, config: UpdateConfig, reinstall: Bool = false
     ) async throws -> ProcessResult {
         let brewPath = config.brewPath ?? "/opt/homebrew/bin/brew"
         var args = ["install", "--cask", "--adopt", token]
